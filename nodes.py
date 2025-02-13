@@ -35,12 +35,16 @@ logger = logging.getLogger(__name__)
 
 from model_uploader import ModelUploader
 from comfy_pipeline.configs import get_global_state
-from comfybridge.utils import get_background_worker
+from comfybridge.utils import get_background_worker, get_beijing_time
 import uuid
 
-def bizyair_upload_files(api_key: str, file_paths: list):
+def bizyair_upload_files(api_key: str, file_paths: list, post_model_name: str):
     uploader = ModelUploader(host="http://127.0.0.1:9000", api_key=api_key)
-    uploader.upload_models(file_paths=file_paths)
+    print(f'{post_model_name=}')
+    custom_data = {
+        'name': post_model_name
+    }
+    uploader.upload_models(file_paths=file_paths, custom_data=custom_data)
     # TODO 检测是否上传成功，上传成功后删除文件
 
 
@@ -498,8 +502,11 @@ class InitFluxLoRATraining:
         
         cache_latents, cache_text_encoder_outputs = "disabled", "disabled"
         output_dir = os.path.abspath(kwargs.get("output_dir"))
-        output_dir = os.path.join(f'{uuid.uuid4()}', output_dir)
+        current_time = get_beijing_time()
+        n_out_dir = f'{output_dir}-{current_time.strftime("%Y-%m-%d_%H:%M:%S")}'
+        output_dir = os.path.join(n_out_dir, uuid.uuid4().hex)
         kwargs['output_dir'] = output_dir
+        kwargs['post_model_name'] = os.path.basename(n_out_dir)
         os.makedirs(output_dir, exist_ok=True)
     
         total, used, free = shutil.disk_usage(output_dir)
@@ -706,7 +713,8 @@ class InitFluxTraining:
         mm.soft_empty_cache()
 
         output_dir = os.path.abspath(kwargs.get("output_dir"))
-        output_dir = os.path.join(output_dir, f'{uuid.uuid4()}')
+        output_dir = os.path.join(f'{uuid.uuid4()}', output_dir)
+        kwargs["output_dir"] = output_dir
         os.makedirs(output_dir, exist_ok=True)
     
         total, used, free = shutil.disk_usage(output_dir)
@@ -1143,6 +1151,7 @@ class FluxTrainEnd:
 
             # metadata
             metadata = json.dumps(network_trainer.metadata, indent=2)
+            post_model_name = network_trainer.args.post_model_name
 
             training_loop = None
             network_trainer = None
@@ -1150,7 +1159,7 @@ class FluxTrainEnd:
         
         FluxTrainEnd._file_paths.append(final_lora_path)
         comfy_pipe_global_state = get_global_state()
-        bizyair_upload_files(comfy_pipe_global_state.api_key, FluxTrainEnd._file_paths)
+        bizyair_upload_files(comfy_pipe_global_state.api_key, FluxTrainEnd._file_paths, post_model_name=post_model_name)
         FluxTrainEnd._file_paths.clear()
 
         return (final_lora_name, metadata, final_lora_path)
