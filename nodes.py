@@ -33,6 +33,17 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+from model_uploader import ModelUploader
+from comfy_pipeline.configs import get_global_state
+from comfybridge.utils import get_background_worker
+import uuid
+
+def bizyair_upload_files(api_key: str, file_paths: list):
+    uploader = ModelUploader(host="http://127.0.0.1:9000", api_key=api_key)
+    uploader.upload_models(file_paths=file_paths)
+    # TODO 检测是否上传成功，上传成功后删除文件
+
+
 class FluxTrainModelSelect:
     @classmethod
     def INPUT_TYPES(s):
@@ -143,7 +154,7 @@ class TrainDatasetRegularization:
                     "is_reg": True
                 }
        
-        return reg_subset,
+        return reg_subset
     
 class TrainDatasetAdd:
     def __init__(self):
@@ -485,7 +496,10 @@ class InitFluxLoRATraining:
                       block_args=None, gradient_checkpointing="enabled", prompt=None, extra_pnginfo=None, clip_l_lr=0, T5_lr=0, loss_args=None, network_config=None, **kwargs):
         mm.soft_empty_cache()
         
+        cache_latents, cache_text_encoder_outputs = "disabled", "disabled"
         output_dir = os.path.abspath(kwargs.get("output_dir"))
+        output_dir = os.path.join(f'{uuid.uuid4()}', output_dir)
+        kwargs['output_dir'] = output_dir
         os.makedirs(output_dir, exist_ok=True)
     
         total, used, free = shutil.disk_usage(output_dir)
@@ -692,6 +706,7 @@ class InitFluxTraining:
         mm.soft_empty_cache()
 
         output_dir = os.path.abspath(kwargs.get("output_dir"))
+        output_dir = os.path.join(output_dir, f'{uuid.uuid4()}')
         os.makedirs(output_dir, exist_ok=True)
     
         total, used, free = shutil.disk_usage(output_dir)
@@ -1014,6 +1029,8 @@ class FluxTrainSave:
 
     def save(self, network_trainer, save_state, copy_to_comfy_lora_folder):
         import shutil
+        save_state, copy_to_comfy_lora_folder = False, False 
+
         with torch.inference_mode(False):
             trainer = network_trainer["network_trainer"]
             global_step = trainer.global_step
@@ -1034,8 +1051,10 @@ class FluxTrainSave:
                 destination_dir = os.path.join(folder_paths.models_dir, "loras", "flux_trainer")
                 os.makedirs(destination_dir, exist_ok=True)
                 shutil.copy(lora_path, os.path.join(destination_dir, ckpt_name))
-        
-            
+
+        if getattr(FluxTrainEnd, '_file_paths', None) is None:
+            FluxTrainEnd._file_paths = []
+        FluxTrainEnd._file_paths.append(lora_path) # TODO upload
         return (network_trainer, lora_path, global_step)
 
 class FluxTrainSaveModel:
@@ -1098,6 +1117,8 @@ class FluxTrainEnd:
     OUTPUT_NODE = True
 
     def endtrain(self, network_trainer, save_state):
+        save_state, copy_to_comfy_lora_folder = False, False # TODO fix
+
         with torch.inference_mode(False):
             training_loop = network_trainer["training_loop"]
             network_trainer = network_trainer["network_trainer"]
@@ -1126,7 +1147,12 @@ class FluxTrainEnd:
             training_loop = None
             network_trainer = None
             mm.soft_empty_cache()
-            
+        
+        FluxTrainEnd._file_paths.append(final_lora_path)
+        comfy_pipe_global_state = get_global_state()
+        bizyair_upload_files(comfy_pipe_global_state.api_key, FluxTrainEnd._file_paths)
+        FluxTrainEnd._file_paths.clear()
+
         return (final_lora_name, metadata, final_lora_path)
 
 class FluxTrainResume:
